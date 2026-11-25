@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Peta Zona Musim (ZOM) D.I. Yogyakarta - BMKG</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
+    body { display: flex; flex-direction: column; height: 100vh; background: #f4f6f8; }
+    header {
+      background: #0b3c5d; color: #fff; padding: 10px 18px;
+      display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25); z-index: 1000;
+    }
+    header h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.3px; }
+    header p { font-size: 11px; color: #cfd8dc; margin-top: 2px; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .season-select {
+      background: #1b4f72; color: #fff; border: 1px solid #5dade2;
+      padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 5px; }
+    .btn-param {
+      background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.3);
+      padding: 6px 11px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-param:hover { background: rgba(255,255,255,0.28); }
+    .btn-param.active { background: #f39c12; color: #111; border-color: #f39c12; }
+    #map { flex: 1; width: 100%; background: #e8ecef; }
+    .legend {
+      background: rgba(255, 255, 255, 0.96); padding: 11px 14px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.22); font-size: 12px; line-height: 1.55; min-width: 185px;
+    }
+    .legend h4 { margin-bottom: 6px; font-size: 12.5px; color: #0b3c5d; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .legend-color { width: 20px; height: 14px; border-radius: 2px; border: 1px solid #444; flex-shrink: 0; }
+    .zom-label {
+      background: transparent !important; border: none !important; box-shadow: none !important;
+      font-weight: 800; font-size: 13px; color: #111;
+      text-shadow: -1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff;
+    }
+    .popup-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+    .popup-table td { padding: 4px 6px; border-bottom: 1px solid #eee; }
+    .popup-table td:first-child { font-weight: 600; color: #444; width: 46%; }
+    #status-badge {
+      position: fixed; top: 68px; left: 50%; transform: translateX(-50%);
+      background: #0b3c5d; color: #fff; padding: 6px 14px; border-radius: 20px;
+      font-size: 11px; z-index: 2000; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>PRAKIRAAN MUSIM ZONA MUSIM (ZOM) D.I. YOGYAKARTA</h1>
+    <p id="sub-title">Memuat koneksi data...</p>
+  </div>
+  <div class="toolbar">
+    <!-- Ganti ke 'AMK' saat update Musim Kemarau -->
+    <select id="season-mode" class="season-select" onchange="changeSeasonMode(this.value)">
+      <option value="AMH" selected>Musim Hujan (AMH)</option>
+      <option value="AMK">Musim Kemarau (AMK)</option>
+    </select>
+    <div class="controls">
+      <button class="btn-param active" onclick="setParameter('AWAL', this)">Awal Musim</button>
+      <button class="btn-param" onclick="setParameter('SIFAT', this)">Sifat Musim</button>
+      <button class="btn-param" onclick="setParameter('MAMUNDUR', this)">Maju / Mundur</button>
+      <button class="btn-param" onclick="setParameter('PUNCAK', this)">Puncak Musim</button>
+      <button class="btn-param" onclick="setParameter('AKHIR', this)">Akhir Musim</button>
+    </div>
+  </div>
+</header>
+
+<div id="status-badge">Menghubungkan peta & data SNI...</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const GEOJSON_URL = 'https://raw.githubusercontent.com/ardhiharun/peta_ZOM_DIY/refs/heads/main/ZOM.json';
+  const SHEET_ID = '16CxmiRTPHWxW4iDBE0LBMQGBE_TjCujo4Ph8y18oPuk';
+
+  // Data cadangan AMH 2026/2027 jika Google Sheets kantor diblokir firewall
+  const FALLBACK_DATA = {
+    'DIY_1': { NOZONA: 'DIY_1', ZOM: '268', 'AWAL PMH': 'NOV III 2026', 'PERBANDAWAL': '4', 'SIFAT PMH': 'N',  'PUNCAK PMH': 'FEB 2027', 'DURASI PMH': '16', 'MAMUNDURASI': '-5', 'AKHIR PMH': 'APR III 2027' },
+    'DIY_2': { NOZONA: 'DIY_2', ZOM: '269', 'AWAL PMH': 'NOV III 2026', 'PERBANDAWAL': '3', 'SIFAT PMH': 'N',  'PUNCAK PMH': 'FEB 2027', 'DURASI PMH': '15', 'MAMUNDURASI': '-4', 'AKHIR PMH': 'APR II 2027' },
+    'DIY_3': { NOZONA: 'DIY_3', ZOM: '270', 'AWAL PMH': 'DES I 2026',   'PERBANDAWAL': '3', 'SIFAT PMH': 'AN', 'PUNCAK PMH': 'FEB 2027', 'DURASI PMH': '13', 'MAMUNDURASI': '-4', 'AKHIR PMH': 'APR I 2027' },
+    'DIY_4': { NOZONA: 'DIY_4', ZOM: '271', 'AWAL PMH': 'DES I 2026',   'PERBANDAWAL': '3', 'SIFAT PMH': 'N',  'PUNCAK PMH': 'FEB 2027', 'DURASI PMH': '13', 'MAMUNDURASI': '-4', 'AKHIR PMH': 'APR I 2027' },
+    'DIY_5': { NOZONA: 'DIY_5', ZOM: '272', 'AWAL PMH': 'DES I 2026',   'PERBANDAWAL': '3', 'SIFAT PMH': 'BN', 'PUNCAK PMH': 'MAR 2027', 'DURASI PMH': '13', 'MAMUNDURASI': '-4', 'AKHIR PMH': 'APR I 2027' },
+    'DIY_6': { NOZONA: 'DIY_6', ZOM: '273', 'AWAL PMH': 'DES I 2026',   'PERBANDAWAL': '4', 'SIFAT PMH': 'N',  'PUNCAK PMH': 'JAN 2027', 'DURASI PMH': '18', 'MAMUNDURASI': '0',  'AKHIR PMH': 'MEI III 2027' },
+    'DIY_7': { NOZONA: 'DIY_7', ZOM: '274', 'AWAL PMH': 'DES I 2026',   'PERBANDAWAL': '3', 'SIFAT PMH': 'N',  'PUNCAK PMH': 'JAN 2027', 'DURASI PMH': '18', 'MAMUNDURASI': '1',  'AKHIR PMH': 'MEI III 2027' },
+    'DIY_8': { NOZONA: 'DIY_8', ZOM: '275', 'AWAL PMH': 'DES I 2026',   'PERBANDAWAL': '4', 'SIFAT PMH': 'N',  'PUNCAK PMH': 'FEB 2027', 'DURASI PMH': '15', 'MAMUNDURASI': '-4', 'AKHIR PMH': 'APR III 2027' }
+  };
+
+  // =========================================================================
+  // TABEL WARNA STANDAR SNI BMKG (VERIFIED RGB 255)
+  // =========================================================================
+
+  // 1A. Tabel Warna Kolom Merah AMH (Dipakai untuk: AWAL MH & AKHIR MK)
+  const SNI_DASARIAN_AMH = {
+    'MEI I':   'rgb(54, 8, 140)',
+    'MEI II':  'rgb(75, 12, 204)',
+    'MEI III': 'rgb(98, 13, 252)',
+    'JUN I':   'rgb(8, 38, 152)',
+    'JUN II':  'rgb(10, 52, 190)',
+    'JUN III': 'rgb(15, 74, 252)',
+    'JUL I':   'rgb(9, 106, 149)',
+    'JUL II':  'rgb(12, 139, 193)',
+    'JUL III': 'rgb(15, 186, 254)',
+    'AGT I':   'rgb(8, 138, 138)',
+    'AGT II':  'rgb(12, 185, 192)',
+    'AGT III': 'rgb(15, 241, 253)',
+    'SEP I':   'rgb(9, 149, 14)',
+    'SEP II':  'rgb(12, 188, 27)',
+    'SEP III': 'rgb(16, 254, 35)',
+    'OKT I':   'rgb(91, 148, 9)',
+    'OKT II':  'rgb(123, 197, 12)',
+    'OKT III': 'rgb(154, 253, 15)',
+    'NOV I':   'rgb(254, 251, 13)',
+    'NOV II':  'rgb(208, 205, 11)',
+    'NOV III': 'rgb(169, 168, 10)',
+    'DES I':   'rgb(255, 184, 16)',
+    'DES II':  'rgb(208, 146, 13)',
+    'DES III': 'rgb(150, 107, 11)',
+    'JAN I':   'rgb(254, 126, 16)',
+    'JAN II':  'rgb(209, 106, 13)',
+    'JAN III': 'rgb(149, 71, 9)',
+    'FEB I':   'rgb(252, 38, 14)',
+    'FEB II':  'rgb(199, 29, 12)',
+    'FEB III': 'rgb(130, 19, 8)',
+    'MAR I':   'rgb(253, 15, 188)',
+    'MAR II':  'rgb(209, 14, 155)',
+    'MAR III': 'rgb(150, 9, 85)',
+    'APR I':   'rgb(180, 16, 254)',
+    'APR II':  'rgb(143, 13, 209)',
+    'APR III': 'rgb(82, 6, 119)'
+  };
+
+  // 1B. Tabel Warna Kolom Hijau AMK (Dipakai untuk: AWAL MK & AKHIR MH)
+  const SNI_DASARIAN_AMK = {
+    'NOV III': 'rgb(54, 8, 140)',
+    'NOV II':  'rgb(75, 12, 204)',
+    'NOV I':   'rgb(98, 13, 252)',
+    'OKT III': 'rgb(8, 38, 152)',
+    'OKT II':  'rgb(10, 52, 190)',
+    'OKT I':   'rgb(15, 74, 252)',
+    'SEP III': 'rgb(9, 106, 149)',
+    'SEP II':  'rgb(12, 139, 193)',
+    'SEP I':   'rgb(15, 186, 254)',
+    'AGT III': 'rgb(8, 138, 138)',
+    'AGT II':  'rgb(12, 185, 192)',
+    'AGT I':   'rgb(15, 241, 253)',
+    'JUL III': 'rgb(9, 149, 14)',
+    'JUL II':  'rgb(12, 188, 27)',
+    'JUL I':   'rgb(16, 254, 35)',
+    'JUN III': 'rgb(91, 148, 9)',
+    'JUN II':  'rgb(123, 197, 12)',
+    'JUN I':   'rgb(154, 253, 15)',
+    'MEI III': 'rgb(254, 251, 13)',
+    'MEI II':  'rgb(208, 205, 11)',
+    'MEI I':   'rgb(169, 168, 10)',
+    'APR III': 'rgb(255, 184, 16)',
+    'APR II':  'rgb(208, 146, 13)',
+    'APR I':   'rgb(150, 107, 11)',
+    'MAR III': 'rgb(254, 126, 16)',
+    'MAR II':  'rgb(209, 106, 13)',
+    'MAR I':   'rgb(149, 71, 9)',
+    'FEB III': 'rgb(252, 38, 14)',
+    'FEB II':  'rgb(199, 29, 12)',
+    'FEB I':   'rgb(130, 19, 8)',
+    'JAN III': 'rgb(253, 15, 188)',
+    'JAN II':  'rgb(209, 14, 155)',
+    'JAN I':   'rgb(150, 9, 85)',
+    'DES III': 'rgb(180, 16, 254)',
+    'DES II':  'rgb(143, 13, 209)',
+    'DES I':   'rgb(82, 6, 119)'
+  };
+
+  // 2. Sifat Musim Hujan & Kemarau (SNI)
+  const SNI_SIFAT = {
+    'AN': 'rgb(56, 167, 0)',  'ATAS NORMAL': 'rgb(56, 167, 0)',
+    'N':  'rgb(255, 255, 0)', 'NORMAL': 'rgb(255, 255, 0)',
+    'BN': 'rgb(168, 112, 1)', 'BAWAH NORMAL': 'rgb(168, 112, 1)'
+  };
+
+  // 3A. Puncak Musim Hujan (SNI)
+  const SNI_PUNCAK_MH = {
+    'JUL': 'rgb(154, 253, 15)', 'JULI': 'rgb(154, 253, 15)',
+    'AGT': 'rgb(123, 197, 12)', 'AGUSTUS': 'rgb(123, 197, 12)',
+    'SEP': 'rgb(91, 148, 9)',   'SEPTEMBER': 'rgb(91, 148, 9)',
+    'OKT': 'rgb(16, 254, 35)',  'OKTOBER': 'rgb(16, 254, 35)',
+    'NOV': 'rgb(12, 188, 27)',  'NOVEMBER': 'rgb(12, 188, 27)',
+    'DES': 'rgb(9, 149, 14)',   'DESEMBER': 'rgb(9, 149, 14)',
+    'JAN': 'rgb(8, 38, 152)',   'JANUARI': 'rgb(8, 38, 152)',
+    'FEB': 'rgb(10, 52, 190)',  'FEBRUARI': 'rgb(10, 52, 190)',
+    'MAR': 'rgb(15, 74, 252)',  'MARET': 'rgb(15, 74, 252)',
+    'APR': 'rgb(9, 106, 149)',  'APRIL': 'rgb(9, 106, 149)',
+    'MEI': 'rgb(12, 139, 193)',
+    'JUN': 'rgb(15, 186, 254)', 'JUNI': 'rgb(15, 186, 254)'
+  };
+
+  // 3B. Puncak Musim Kemarau (SNI)
+  const SNI_PUNCAK_MK = {
+    'JAN': 'rgb(255, 184, 16)', 'JANUARI': 'rgb(255, 184, 16)',
+    'FEB': 'rgb(208, 146, 13)', 'FEBRUARI': 'rgb(208, 146, 13)',
+    'MAR': 'rgb(150, 107, 11)', 'MARET': 'rgb(150, 107, 11)',
+    'APR': 'rgb(254, 126, 16)', 'APRIL': 'rgb(254, 126, 16)',
+    'MEI': 'rgb(209, 106, 13)',
+    'JUN': 'rgb(149, 71, 9)',   'JUNI': 'rgb(149, 71, 9)',
+    'JUL': 'rgb(130, 19, 8)',   'JULI': 'rgb(130, 19, 8)',
+    'AGT': 'rgb(199, 29, 12)',  'AGUSTUS': 'rgb(199, 29, 12)',
+    'SEP': 'rgb(252, 38, 14)',  'SEPTEMBER': 'rgb(252, 38, 14)',
+    'OKT': 'rgb(150, 9, 85)',   'OKTOBER': 'rgb(150, 9, 85)',
+    'NOV': 'rgb(209, 14, 155)', 'NOVEMBER': 'rgb(209, 14, 155)',
+    'DES': 'rgb(253, 15, 188)', 'DESEMBER': 'rgb(253, 15, 188)'
+  };
+
+  // =========================================================================
+
+  const map = L.map('map').setView([-7.88, 110.42], 10);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri | Standar Warna SNI BMKG',
+    maxZoom: 16
+  }).addTo(map);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 16
+  }).addTo(map);
+
+  let geojsonLayer = null;
+  let sheetDataMap = {};
+  let currentParam = 'AWAL';
+  let seasonMode = 'AMH'; // 'AMH' atau 'AMK'
+
+  // Ambil nilai kolom dari Google Sheets secara fleksibel
+  function getFieldVal(row, paramType) {
+    if (!row) return '';
+    if (paramType === 'AWAL')     return row['AWAL PMH'] || row['AWAL PMK'] || row['AWAL_MUSIM'] || '';
+    if (paramType === 'SIFAT')    return row['SIFAT PMH'] || row['SIFAT PMK'] || row['SIFAT_MUSIM'] || '';
+    if (paramType === 'MAMUNDUR') return row['PERBANDAWAL'] !== undefined ? row['PERBANDAWAL'] : '';
+    if (paramType === 'PUNCAK')   return row['PUNCAK PMH'] || row['PUNCAK PMK'] || row['PUNCAK_MUSIM'] || '';
+    if (paramType === 'AKHIR')    return row['AKHIR PMH'] || row['AKHIR PMK'] || row['AKHIR_MUSIM'] || '';
+    return '';
+  }
+
+  // Hapus angka tahun (misal "NOV III 2026" -> "NOV III", "FEB 2027" -> "FEB")
+  function stripYear(text) {
+    return String(text || '').toUpperCase().replace(/\b20\d{2}\b/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function getColor(paramType, rawVal) {
+    if (rawVal === undefined || rawVal === null || String(rawVal).trim() === '') return '#cccccc';
+    const cleanKey = stripYear(rawVal);
+
+    if (paramType === 'AWAL') {
+      const table = (seasonMode === 'AMH') ? SNI_DASARIAN_AMH : SNI_DASARIAN_AMK;
+      return table[cleanKey] || '#cccccc';
+    }
+
+    if (paramType === 'AKHIR') {
+      const table = (seasonMode === 'AMH') ? SNI_DASARIAN_AMK : SNI_DASARIAN_AMH;
+      return table[cleanKey] || '#cccccc';
+    }
+
+    if (paramType === 'SIFAT') {
+      return SNI_SIFAT[cleanKey] || '#cccccc';
+    }
+
+    if (paramType === 'PUNCAK') {
+      const table = (seasonMode === 'AMH') ? SNI_PUNCAK_MH : SNI_PUNCAK_MK;
+      return table[cleanKey] || '#cccccc';
+    }
+
+    if (paramType === 'MAMUNDUR') {
+      const num = parseFloat(String(rawVal).trim());
+      if (isNaN(num)) return '#cccccc';
+      if (seasonMode === 'AMH') {
+        if (num <= -3) return 'rgb(112, 168, 0)';   // Maju >= 3 Dasarian
+        if (num === -2) return 'rgb(152, 229, 0)';  // Maju 2 Dasarian
+        if (num === -1) return 'rgb(208, 255, 115)';// Maju 1 Dasarian
+        if (num === 0)  return 'rgb(255, 255, 0)';  // Sama
+        if (num === 1)  return 'rgb(255, 211, 128)';// Mundur 1 Dasarian
+        if (num === 2)  return 'rgb(230, 152, 0)';  // Mundur 2 Dasarian
+        return 'rgb(168, 112, 1)';                  // Mundur >= 3 Dasarian
+      } else {
+        if (num >= 3)   return 'rgb(112, 168, 0)';   // Mundur >= 3 Dasarian
+        if (num === 2)  return 'rgb(152, 229, 0)';  // Mundur 2 Dasarian
+        if (num === 1)  return 'rgb(208, 255, 115)';// Mundur 1 Dasarian
+        if (num === 0)  return 'rgb(255, 255, 0)';  // Sama
+        if (num === -1) return 'rgb(255, 211, 128)';// Maju 1 Dasarian
+        if (num === -2) return 'rgb(230, 152, 0)';  // Maju 2 Dasarian
+        return 'rgb(168, 112, 1)';                  // Maju >= 3 Dasarian
+      }
+    }
+    return '#cccccc';
+  }
+
+  function styleFeature(feature) {
+    const noZona = feature.properties.NOZONA;
+    const row = sheetDataMap[noZona] || {};
+    const val = getFieldVal(row, currentParam);
+    return {
+      fillColor: getColor(currentParam, val),
+      weight: 2,
+      opacity: 1,
+      color: '#222222',
+      fillOpacity: 0.85
+    };
+  }
+
+  const legend = L.control({ position: 'bottomright' });
+  legend.onAdd = function () {
+    const div = L.DomUtil.create('div', 'legend');
+    div.id = 'legend-box';
+    return div;
+  };
+  legend.addTo(map);
+
+  function updateLegend() {
+    const div = document.getElementById('legend-box');
+    const seasonLabel = (seasonMode === 'AMH') ? 'Musim Hujan' : 'Musim Kemarau';
+    const titles = {
+      'AWAL': `Awal ${seasonLabel}`,
+      'SIFAT': `Sifat ${seasonLabel}`,
+      'MAMUNDUR': `Perbandingan (${seasonMode})`,
+      'PUNCAK': `Puncak ${seasonLabel}`,
+      'AKHIR': `Akhir ${seasonLabel}`
+    };
+    let html = `<h4>${titles[currentParam]}</h4>`;
+
+    if (currentParam === 'MAMUNDUR') {
+      const itemsAMH = [
+        { label: 'Maju ≥ 3 Dasarian',   color: 'rgb(112, 168, 0)' },
+        { label: 'Maju 2 Dasarian',     color: 'rgb(152, 229, 0)' },
+        { label: 'Maju 1 Dasarian',     color: 'rgb(208, 255, 115)' },
+        { label: 'Sama',                color: 'rgb(255, 255, 0)' },
+        { label: 'Mundur 1 Dasarian',   color: 'rgb(255, 211, 128)' },
+        { label: 'Mundur 2 Dasarian',   color: 'rgb(230, 152, 0)' },
+        { label: 'Mundur ≥ 3 Dasarian', color: 'rgb(168, 112, 1)' }
+      ];
+      const itemsAMK = [
+        { label: 'Mundur ≥ 3 Dasarian', color: 'rgb(112, 168, 0)' },
+        { label: 'Mundur 2 Dasarian',   color: 'rgb(152, 229, 0)' },
+        { label: 'Mundur 1 Dasarian',   color: 'rgb(208, 255, 115)' },
+        { label: 'Sama',                color: 'rgb(255, 255, 0)' },
+        { label: 'Maju 1 Dasarian',     color: 'rgb(255, 211, 128)' },
+        { label: 'Maju 2 Dasarian',     color: 'rgb(230, 152, 0)' },
+        { label: 'Maju ≥ 3 Dasarian',   color: 'rgb(168, 112, 1)' }
+      ];
+      const list = (seasonMode === 'AMH') ? itemsAMH : itemsAMK;
+      list.forEach(it => {
+        html += `<div class="legend-item"><span class="legend-color" style="background:${it.color}"></span><span>${it.label}</span></div>`;
+      });
+    } else if (currentParam === 'SIFAT') {
+      const itemsSifat = [
+        { label: 'Atas Normal (AN)',  color: 'rgb(56, 167, 0)' },
+        { label: 'Normal (N)',        color: 'rgb(255, 255, 0)' },
+        { label: 'Bawah Normal (BN)', color: 'rgb(168, 112, 1)' }
+      ];
+      itemsSifat.forEach(it => {
+        html += `<div class="legend-item"><span class="legend-color" style="background:${it.color}"></span><span>${it.label}</span></div>`;
+      });
+    } else {
+      const uniqueVals = [...new Set(Object.values(sheetDataMap).map(r => getFieldVal(r, currentParam)).filter(Boolean))];
+      uniqueVals.forEach(val => {
+        html += `<div class="legend-item"><span class="legend-color" style="background:${getColor(currentParam, val)}"></span><span>${val}</span></div>`;
+      });
+    }
+    div.innerHTML = html;
+  }
+
+  function setParameter(paramName, btnEl) {
+    currentParam = paramName;
+    document.querySelectorAll('.btn-param').forEach(b => b.classList.remove('active'));
+    btnEl.classList.add('active');
+    if (geojsonLayer) geojsonLayer.setStyle(styleFeature);
+    updateLegend();
+  }
+
+  function changeSeasonMode(mode) {
+    seasonMode = mode;
+    if (geojsonLayer) geojsonLayer.setStyle(styleFeature);
+    updateLegend();
+  }
+
+  function loadSheetWithFallback() {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve({ data: FALLBACK_DATA, source: 'Data AMH 2026/2027 (Standar Warna SNI BMKG)' });
+        }
+      }, 4500);
+
+      window.google = window.google || {};
+      window.google.visualization = window.google.visualization || {};
+      window.google.visualization.Query = window.google.visualization.Query || {};
+      window.google.visualization.Query.setResponse = function(response) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (!response || !response.table) {
+          resolve({ data: FALLBACK_DATA, source: 'Data AMH 2026/2027 (Standar Warna SNI BMKG)' });
+          return;
+        }
+        const cols = response.table.cols.map(c => (c.label || '').trim());
+        const rows = response.table.rows;
+        const mapObj = {};
+
+        rows.forEach(r => {
+          const obj = {};
+          r.c.forEach((cell, idx) => {
+            const colName = cols[idx];
+            if (colName) {
+              obj[colName] = cell ? (cell.f !== undefined && cell.f !== null ? String(cell.f) : (cell.v !== null ? String(cell.v) : '')) : '';
+            }
+          });
+          if (obj['NOZONA']) mapObj[obj['NOZONA'].trim()] = obj;
+        });
+        resolve({ data: Object.keys(mapObj).length ? mapObj : FALLBACK_DATA, source: 'Terhubung Live ke Google Sheets (Standar Warna SNI BMKG)' });
+      };
+
+      const script = document.createElement('script');
+      script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Sheet1`;
+      script.onerror = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve({ data: FALLBACK_DATA, source: 'Data AMH 2026/2027 (Standar Warna SNI BMKG)' });
+        }
+      };
+      document.body.appendChild(script);
+    });
+  }
+
+  Promise.all([
+    fetch(GEOJSON_URL).then(r => r.json()),
+    loadSheetWithFallback()
+  ]).then(([geoData, sheetRes]) => {
+    sheetDataMap = sheetRes.data;
+    document.getElementById('sub-title').innerText = sheetRes.source;
+
+    geojsonLayer = L.geoJSON(geoData, {
+      style: styleFeature,
+      onEachFeature: function (feature, layer) {
+        const noZona = feature.properties.NOZONA;
+        const d = sheetDataMap[noZona] || {};
+        const zomNum = d['ZOM'] || noZona;
+
+        layer.bindTooltip(`${zomNum}`, {
+          permanent: true,
+          direction: 'center',
+          className: 'zom-label'
+        });
+
+        const popupHtml = `
+          <div style="min-width:215px">
+            <h3 style="margin:0 0 4px; color:#0b3c5d; font-size:14px;">ZOM ${zomNum} (${noZona})</h3>
+            <table class="popup-table">
+              <tr><td>Awal Musim</td><td><b>${getFieldVal(d, 'AWAL') || '-'}</b></td></tr>
+              <tr><td>Perbandingan</td><td>${getFieldVal(d, 'MAMUNDUR') || '0'} Dasarian</td></tr>
+              <tr><td>Sifat Musim</td><td><b>${getFieldVal(d, 'SIFAT') || '-'}</b></td></tr>
+              <tr><td>Puncak Musim</td><td><b>${getFieldVal(d, 'PUNCAK') || '-'}</b></td></tr>
+              <tr><td>Durasi Musim</td><td>${d['DURASI PMH'] || d['DURASI PMK'] || '-'} Dasarian</td></tr>
+              <tr><td>Akhir Musim</td><td><b>${getFieldVal(d, 'AKHIR') || '-'}</b></td></tr>
+            </table>
+          </div>
+        `;
+        layer.bindPopup(popupHtml);
+      }
+    }).addTo(map);
+
+    map.fitBounds(geojsonLayer.getBounds());
+    updateLegend();
+    document.getElementById('status-badge').style.display = 'none';
+  }).catch(err => {
+    document.getElementById('status-badge').innerText = 'Gagal memuat file ZOM.json dari GitHub. Pastikan koneksi internet aktif.';
+    console.error(err);
+  });
+</script>
+</body>
+</html>
